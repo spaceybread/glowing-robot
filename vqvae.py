@@ -22,7 +22,6 @@ class VectorQuantizer(nn.Module):
         B, C, D, H, W = z.shape
         z_flat = z.permute(0,2,3,4,1).reshape(-1, C).detach()
 
-        # squared euclidean distance
         z_sq  = (z_flat ** 2).sum(1, keepdim=True)
         cb_sq = (self.codebook ** 2).sum(1, keepdim=True).T
         dists = z_sq + cb_sq - 2 * z_flat @ self.codebook.T
@@ -85,28 +84,26 @@ if __name__ == '__main__':
     train_loader = DataLoader(TensorDataset(dataset[:n]), batch_size=8, shuffle=True)
     val_loader   = DataLoader(TensorDataset(dataset[n:]), batch_size=8, shuffle=False)
 
-    # class weights
-    print("Computing weights...")
     counts = torch.zeros(vocab_size)
-    sample = dataset[torch.randint(0, len(dataset), (1000,))]
+    sample = dataset[torch.randint(0, len(dataset), (2000,))]
     for i in range(vocab_size):
         counts[i] = (sample == i).sum()
 
-    air_idx   = next((i for i, n in enumerate(meta['vocab']) if n == 'air'),   0)
+    probs = counts / counts.sum()
+    weights = 1.0 / torch.log(1.1 + probs)
+
+    air_idx = next((i for i, n in enumerate(meta['vocab']) if n == 'air'), 0)
     stone_idx = next((i for i, n in enumerate(meta['vocab']) if n == 'stone'), None)
 
-    weights       = torch.zeros(vocab_size)
-    present       = counts > 0
-    weights[present] = 1.0 / torch.sqrt(counts[present])
-    weights[air_idx] = weights[present].min() * 0.1
-    if stone_idx:
-        weights[stone_idx] = weights[present].min() * 0.1
-    weights = weights / weights.sum() * present.sum()
+    weights = weights / weights.max()
+    weights[air_idx] = max(weights[air_idx], 0.1)
+    if stone_idx is not None:
+        weights[stone_idx] = max(weights[stone_idx], 0.2)
+
     weights = weights.to(device)
 
     model     = VQVAE(vocab_size=vocab_size, embed_dim=16, latent_dim=64, num_embeddings=512).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    # scheduler steps per EPOCH not per batch
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
     beta      = 0.1
     best_val  = float('inf')
@@ -129,8 +126,6 @@ if __name__ == '__main__':
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-
-        # step scheduler once per epoch, not per batch
         scheduler.step()
 
         model.eval()

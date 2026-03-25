@@ -6,6 +6,7 @@ from gpt import GPT
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from tqdm import tqdm
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -24,46 +25,67 @@ gpt.eval()
 @torch.no_grad()
 def generate_chunk(temperature=0.8):
     context = torch.zeros((1, 1), dtype=torch.long, device=device)
-    
     codes_seq = gpt.generate(context, max_new_tokens=256, temperature=temperature)
-    codes = codes_seq[:, 1:257].reshape(1, 16, 4, 4)
+    
+    codes = codes_seq[:, 1:257].reshape(1, 4, 4, 16)
     
     z_q = vqvae.quantizer.codebook[codes] 
     z_q = z_q.permute(0, 4, 1, 2, 3).float()
     
     vox_logits = vqvae.decoder(z_q)
     chunk = vox_logits.argmax(dim=1)[0].cpu().numpy()
-    return chunk
+    return chunk    
 
 def render_voxels(grid):
     COLORS = {
         'air': (0, 0, 0, 0),
+        'cave_air': (0, 0, 0, 0),
         'stone': (0.5, 0.5, 0.5, 1),
         'deepslate': (0.2, 0.2, 0.2, 1),
         'dirt': (0.55, 0.27, 0.07, 1),
-        'grass_block': (0.13, 0.55, 0.13, 1),
-        'water': (0.12, 0.56, 1.0, 0.5),
-        'sand': (0.9, 0.8, 0.6, 1),
-        'oak_log': (0.3, 0.2, 0.1, 1),
-        'oak_leaves': (0, 0.4, 0, 0.8),
-        'other': (1, 0, 1, 1)
+        'grass_block': (0.35, 0.6, 0.2, 1),
+        'water': (0.2, 0.4, 0.8, 0.5),
+        'sand': (0.85, 0.8, 0.5, 1),
+        'sandstone': (0.8, 0.75, 0.45, 1),
+        'gravel': (0.55, 0.55, 0.55, 1),
+        'granite': (0.6, 0.45, 0.4, 1),
+        'diorite': (0.75, 0.75, 0.75, 1),
+        'andesite': (0.52, 0.52, 0.52, 1),
+        'tuff': (0.4, 0.4, 0.35, 1),
+        'clay': (0.6, 0.65, 0.75, 1),
+        'coal_ore': (0.15, 0.15, 0.15, 1),
+        'iron_ore': (0.75, 0.65, 0.55, 1),
+        'copper_ore': (0.7, 0.45, 0.35, 1),
+        'lapis_ore': (0.1, 0.3, 0.7, 1),
+        'dripstone_block': (0.5, 0.4, 0.3, 1),
+        'pointed_dripstone': (0.45, 0.35, 0.25, 1),
+        'smooth_basalt': (0.3, 0.3, 0.3, 1),
+        'ice': (0.6, 0.8, 1.0, 0.6),
+        'packed_ice': (0.5, 0.7, 1.0, 1),
+        'snow': (0.95, 0.95, 0.95, 1),
+        'snow_block': (1.0, 1.0, 1.0, 1),
+        'oak_leaves': (0.1, 0.4, 0.1, 0.7),
+        'birch_leaves': (0.3, 0.5, 0.2, 0.7),
+        'spruce_leaves': (0.05, 0.3, 0.1, 0.7),
+        'leaf_litter': (0.4, 0.3, 0.1, 1),
+        'moss_block': (0.3, 0.4, 0.1, 1),
+        'other': (1, 0, 1, 1) 
     }
 
-    Y_dim, X_dim, Z_dim = grid.shape
-    voxels = np.zeros((X_dim, Z_dim, Y_dim), dtype=bool)
-    facecolors = np.zeros((X_dim, Z_dim, Y_dim, 4))
+    grid_fixed = grid.transpose(0, 1, 2)
+    
+    X_max, Z_max, Y_max = grid_fixed.shape
+    voxels = np.zeros((X_max, Z_max, Y_max), dtype=bool)
+    facecolors = np.zeros((X_max, Z_max, Y_max, 4))
 
-    for y in range(Y_dim):
-        for x in range(X_dim):
-            for z in range(Z_dim):
-                block_id = int(grid[y, x, z])
+    for x in range(X_max):
+        for z in range(Z_max):
+            for y in range(Y_max - 8):
+                block_id = int(grid_fixed[x, z, y])
                 name = id2block.get(block_id, 'other')
-                if name == 'air': continue
-
-                if y < Y_dim - 1:
-                    above_id = int(grid[y+1, x, z])
-                    if id2block.get(above_id, 'air') != 'air':
-                        continue
+                
+                if name == 'air': 
+                    continue
 
                 voxels[x, z, y] = True
                 facecolors[x, z, y] = COLORS.get(name, COLORS['other'])
@@ -94,20 +116,15 @@ def render_slice(grid, z_slice=16):
 print("Generating chunks...")
 fig = plt.figure(figsize=(25, 6))
 
-for i in range(5):
+for i in tqdm(range(5)):
     ax = fig.add_subplot(1, 5, i+1, projection='3d')
 
     chunk = generate_chunk(temperature=1.0)
     voxels, colors = render_voxels(chunk)
 
-    # img = render_slice(chunk, z_slice=16)
-    # ax.imshow(img)
-    # ax.set_title(f"Generated {i+1}")
-    # ax.axis('off')
-
     ax.voxels(voxels, facecolors=colors, edgecolor=None)
     ax.view_init(elev=30, azim=45)
-    ax.set_title(f'Generated {i+1}')
+    ax.set_title(f'Temp = {0.9}')
     ax.set_axis_off()
 
 plt.suptitle('Generated Minecraft Chunks (VQ-VAE + GPT)', fontsize=14)
