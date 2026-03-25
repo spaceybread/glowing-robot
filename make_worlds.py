@@ -1,17 +1,30 @@
 import torch
 import json
 import numpy as np
+import os
+import random
 from vqvae import VQVAE
 from gpt import GPT
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from tqdm import tqdm
+
+NUM_SAMPLES = 300
+TEMPERATURE = 1.0
+OUTPUT_DIR = "generated_worlds"
+SEED = None               
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+if SEED is not None:
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
+    random.seed(SEED)
+
 with open('data_files/vocab_filtered.json') as f:
     meta = json.load(f)
+
 id2block = {i: b for i, b in enumerate(meta['vocab'])}
 
 vqvae = VQVAE(vocab_size=31, embed_dim=16, latent_dim=64, num_embeddings=512).to(device)
@@ -23,18 +36,18 @@ gpt.load_state_dict(torch.load('data_files/gpt_codes_best.pth', map_location=dev
 gpt.eval()
 
 @torch.no_grad()
-def generate_chunk(temperature=0.8):
+def generate_chunk():
     context = torch.zeros((1, 1), dtype=torch.long, device=device)
-    codes_seq = gpt.generate(context, max_new_tokens=256, temperature=temperature)
-    
+    codes_seq = gpt.generate(context, max_new_tokens=256, temperature=TEMPERATURE)
+
     codes = codes_seq[:, 1:257].reshape(1, 4, 4, 16)
-    
-    z_q = vqvae.quantizer.codebook[codes] 
+
+    z_q = vqvae.quantizer.codebook[codes]
     z_q = z_q.permute(0, 4, 1, 2, 3).float()
-    
+
     vox_logits = vqvae.decoder(z_q)
     chunk = vox_logits.argmax(dim=1)[0].cpu().numpy()
-    return chunk    
+    return chunk
 
 def render_voxels(grid):
     COLORS = {
@@ -80,7 +93,7 @@ def render_voxels(grid):
 
     for x in range(X_max):
         for z in range(Z_max):
-            for y in range(17, Y_max + 1):
+            for y in range(Y_max - 8):
                 block_id = int(grid_fixed[x, z, y])
                 name = id2block.get(block_id, 'other')
                 
@@ -92,42 +105,21 @@ def render_voxels(grid):
 
     return voxels, facecolors
 
-def render_slice(grid, z_slice=16):
-    COLORS = {
-        'air': '#87CEEB', 'stone': '#808080', 'deepslate': '#3a3a3a',
-        'dirt': '#8B4513', 'grass_block': '#228B22', 'water': '#1E90FF',
-        'granite': '#C47A5A', 'andesite': '#A0A0A0', 'diorite': '#D8D8D8',
-        'gravel': '#9A9A8A', 'coal_ore': '#1a1a1a', 'oak_leaves': '#006400',
-        'other': '#FF00FF'
-    }
-    
-    img = np.zeros((128, 32, 3))
-    
-    for y in range(128):
-        for x in range(32):
-            block_id = int(grid[y, x, z_slice])
-            name = id2block.get(block_id, 'other')
-            hex_c = COLORS.get(name, COLORS['other'])
-            
-            rgb = tuple(int(hex_c[i:i+2], 16)/255 for i in (1,3,5))
-            img[127-y, x] = rgb
-    return img
+print(f"Generating {NUM_SAMPLES} worlds...")
 
-print("Generating chunks...")
-fig = plt.figure(figsize=(25, 6))
-
-for i in tqdm(range(5)):
-    ax = fig.add_subplot(1, 5, i+1, projection='3d')
-
-    chunk = generate_chunk(temperature=1.0)
+for i in tqdm(range(NUM_SAMPLES)):
+    chunk = generate_chunk()
     voxels, colors = render_voxels(chunk)
+
+    fig = plt.figure(figsize=(6, 6))
+    ax = fig.add_subplot(111, projection='3d')
 
     ax.voxels(voxels, facecolors=colors, edgecolor=None)
     ax.view_init(elev=30, azim=45)
-    ax.set_title(f'Temp = {0.9}')
     ax.set_axis_off()
 
-plt.suptitle('Generated Minecraft Chunks (VQ-VAE + GPT)', fontsize=14)
-plt.tight_layout()
-plt.savefig('generated_chunks_voxels.png', dpi=150)
-print("Saved generated_chunks_voxels.png")
+    filename = os.path.join(OUTPUT_DIR, f"world_{i:04d}.png")
+    plt.savefig(filename, dpi=150)
+    plt.close(fig) 
+
+print(f"Done. Saved to {OUTPUT_DIR}/")
